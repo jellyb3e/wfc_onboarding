@@ -1,4 +1,7 @@
-class TinyTown extends Phaser.Scene {
+import { ground_avail, ground_adj, ground_weights, house_avail, house_adj, house_weights } from '../adjacencyRules.js';
+import { directions } from '../directions.js';
+
+export default class TinyTown extends Phaser.Scene {
     constructor() {
         super("tinyTown");
     }
@@ -11,58 +14,52 @@ class TinyTown extends Phaser.Scene {
     create() {
         this.mapWidth = 10;
         this.mapHeight = 10;
-        this.entropy = [];
-        this.finalMap = [];
         this.contradiction = false;
         this.allCollapsed = false;
 
-        // define tiles and adjacency rules
-        this.availableTiles = [0, 1, 2];
-        this.adjacencyRules = {
-            0: [0, 1, 2],      // tile 0 can be adjacent to 0, 1, or 2
-            1: [0, 1, 2],
-            2: [0, 1, 2]
-        };
-
-        // initialize map & entropy
-        this.init_map();
-
         // call wfc & generate final collapsed map
-        this.solve();
+        this.groundData = this.solve(ground_avail,ground_adj,ground_weights);
+        this.houseData = this.solve(house_avail,house_adj,house_weights);
 
-        // create tilemap using collapsed tile data
+        // create tilemap
         this.map = this.make.tilemap({ 
-            data: this.finalMap, 
             tileWidth: 16, 
-            tileHeight: 16
+            tileHeight: 16,
+            width: this.mapWidth,
+            height: this.mapHeight
         });
 
         // create tileset from packed tileset image
         this.tileset = this.map.addTilesetImage("tiny-town-packed", "tiny_town_tiles");
 
-        // create tilemap layer
-        this.grassLayer = this.map.createLayer(0, this.tileset, 0, 0).setScale(4);
+        // create dynamic tilemap layers
+        this.groundLayer = this.map.createBlankLayer("Ground", this.tileset, 0, 0, this.mapWidth, this.mapHeight).setScale(4);
+        this.houseLayer = this.map.createBlankLayer("Houses", this.tileset, 0, 0, this.mapWidth, this.mapHeight).setScale(4);
+        
+        // fill each layer
+        this.fillLayer(this.groundLayer,this.groundData);
+        this.fillLayer(this.houseLayer,this.houseData);
     }
 
     update() {
 
     }
 
-    weightedRandom(choices, weights) {
+    weightedRandom(entropy, weights) {
         let totalWeight = 0;
-        for (let c of choices) {
-            totalWeight += weights[c];
+        for (let choice of entropy) {
+            totalWeight += weights[choice];
         }
         let r = Math.random() * totalWeight;
 
         let weight = 0;
-        for (let c of choices) {
-            weight += weights[c];
-            if (r < sum) { 
-                return c;
+        for (let choice of entropy) {
+            weight += weights[choice];
+            if (r < weight) { 
+                return choice;
             }
         }
-        return choices[0];
+        return entropy[0];
     }
 
     valid_cell(x,y) {
@@ -71,17 +68,18 @@ class TinyTown extends Phaser.Scene {
         return valid_x && valid_y;
     }
 
-    init_map() {
-        this.entropy = [];
+    init_map(availableTiles) {
+        let entropy = [];
         for (let y = 0; y < this.mapHeight; y++) {
-            this.entropy.push([]);
+            entropy.push([]);
             for (let x = 0; x < this.mapWidth; x++) {
-                this.entropy[y].push(this.availableTiles.slice()); // copy available tile states
+                entropy[y].push(availableTiles.slice()); // copy available tile states
             }
         }
+        return entropy;
     }
 
-    propagate(x,y) {
+    propagate(x,y,adjacencyRules,entropy) {
         let stack = [[x,y]];
 
         while(stack.length > 0) {
@@ -89,21 +87,20 @@ class TinyTown extends Phaser.Scene {
             let x = top[0];             // overwrite x and y (bad!)
             let y = top[1];
 
-            let adjacentCells = [[x-1,y],[x+1,y],[x,y-1],[x,y+1]];
-            for (let cell of adjacentCells) {
-                let adjx = cell[0];
-                let adjy = cell[1];
+            for (let {dx,dy,dir} of directions) {
+                let adjx = x + dx;
+                let adjy = y + dy;
                 // if adjacent cell is in bounds
                 if (this.valid_cell(adjx,adjy)) {
-                    let adjEntropy = this.entropy[adjy][adjx];
+                    let adjEntropy = entropy[adjy][adjx];
                     let length0 = adjEntropy.length;  // original entropy of the adjacent cell
                     // for each possible tile for the adjacent cell
                     for (let i = adjEntropy.length - 1; i >= 0; i--) {
                         let valid = false;
                         // for each possible tile for the current cell
-                        for (let tile of this.entropy[y][x]) {
+                        for (let tile of entropy[y][x]) {
                             // check if the current cell's possible tile allows for that adjacent tile possibility
-                            if (this.adjacencyRules[tile].includes(adjEntropy[i])) {
+                            if (adjacencyRules[tile][dir].includes(adjEntropy[i])) {
                                 // if a valid possibility, keep it in the tile's entropy list
                                 valid = true;
                                 break;
@@ -129,26 +126,28 @@ class TinyTown extends Phaser.Scene {
                 }
             }
         }
+        return entropy;
     }
 
-    collapse(x,y,weights=null) {
-        let entropyAtCell = this.entropy[y][x];
+    collapse(x,y,entropy,weights) {
+        let entropyAtCell = entropy[y][x];
         let collapseTo;
         if (weights) {
             collapseTo = this.weightedRandom(entropyAtCell, weights);
         } else {
             collapseTo = Phaser.Utils.Array.GetRandom(entropyAtCell);
         }
-        this.entropy[y][x] = [collapseTo];
+        return [collapseTo];
     }
 
-    observe() {
+    observe(entropy,adjacencyRules,weights) {
+        let newEntropy = entropy;
         let smallestEntropy = Infinity;
         let x1 = -1;
         let y1 = -1;
         for (let y = 0; y < this.mapHeight; y++) {
             for (let x = 0; x < this.mapWidth; x++) {
-                let currLen = this.entropy[y][x].length;
+                let currLen = entropy[y][x].length;
                 if (currLen > 1 && currLen < smallestEntropy) {
                     smallestEntropy = currLen;
                     x1 = x;
@@ -158,30 +157,45 @@ class TinyTown extends Phaser.Scene {
         }
         // if smallest entropy cell found
         if (x1 > -1) {
-            this.collapse(x1,y1);
-            this.propagate(x1,y1);
+            newEntropy[y1][x1] = this.collapse(x1,y1,entropy,weights);
+            newEntropy = this.propagate(x1,y1,adjacencyRules,newEntropy);
         } else {
             this.allCollapsed = true;
             console.log("done generating map\n");
         }
+        return newEntropy;
     }
 
-    getFinalTileIDs() {
-        this.finalMap = [];
+    getFinalTileIDs(entropy) {
+        let finalMap = [];
         for (let y = 0; y < this.mapHeight; y++) {
-            this.finalMap.push([]);
+            finalMap.push([]);
             for (let x = 0; x < this.mapWidth; x++) {
-                this.finalMap[y].push(this.entropy[y][x][0]);
+                finalMap[y].push(entropy[y][x][0]);
+            }
+        }
+        return finalMap;
+    }
+
+    solve(available,adjacencyRules,weights) {
+        // initialize map & entropy
+        let entropy = this.init_map(available);
+
+        // constraint solver loop
+        while (!this.contradiction) {
+            entropy = this.observe(entropy,adjacencyRules,weights);
+            if (this.allCollapsed) {
+                // return map layer
+                this.allCollapsed = false;
+                return this.getFinalTileIDs(entropy);
             }
         }
     }
 
-    solve() {
-        while (!this.contradiction) {
-            this.observe();
-            if (this.allCollapsed) {
-                this.getFinalTileIDs();
-                return;
+    fillLayer(layer,tilemap) {
+        for (let y = 0; y < this.mapHeight; y++) {
+            for (let x = 0; x < this.mapWidth; x++) {
+                layer.putTileAt(tilemap[y][x], x, y);
             }
         }
     }

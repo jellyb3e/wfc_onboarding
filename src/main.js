@@ -1,5 +1,6 @@
 // debug with extreme prejudice
 "use strict"
+import TinyTown from "./Scenes/TinyTownScene.js";
 
 // game config
 let config = {
